@@ -1,7 +1,7 @@
 #include <stdint.h>
 
 // creating 11 bit channel
-static uint16_t *parse_buffer(uint8_t buff[]) { 
+uint16_t *parse_buffer(uint8_t buff[]) { 
 		
 	// to store channels
 	uint16_t channel[16];

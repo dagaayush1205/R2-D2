@@ -4,6 +4,7 @@
 #include <string.h>
 #include <zephyr/device.h>
 #include <zephyr/devicetree.h>
+#include <zephyr/drivers/adc.h>
 #include <zephyr/drivers/gnss.h>
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/drivers/sensor.h>
@@ -21,6 +22,7 @@
 #include <Tarzan/lib/cobs.h>
 #include <Tarzan/lib/drive.h>
 #include <Tarzan/lib/sbus.h>
+#include "dth11.h"
 
 LOG_MODULE_REGISTER(Tarzan, CONFIG_TARZAN_LOG_LEVEL);
 
@@ -28,6 +30,7 @@ LOG_MODULE_REGISTER(Tarzan, CONFIG_TARZAN_LOG_LEVEL);
 #define PRIORITY 2        // work_q thread priority
 #define STEPPER_TIMER 100 // stepper pulse width in microseconds
 #define JERK_LIMITER false
+#define BIO_SENSOR_PERIOD_MS 1000 // bio sensor sampling period
 
 /* sbus uart */
 static const struct device *const sbus_uart =
@@ -61,6 +64,18 @@ static const struct gpio_dt_spec init_led =
 static const struct gpio_dt_spec sbus_status_led =
     GPIO_DT_SPEC_GET(DT_ALIAS(led1), gpios);
 const struct pwm_dt_spec error_led = PWM_DT_SPEC_GET(DT_ALIAS(pwm_led0));
+
+/* DT spec for bio sensor (ADC channel) */
+#define MY_ADC_CHANNEL_1 DT_ALIAS(bio_sensor4)
+static const struct adc_channel_cfg adc_channel_1 =
+    ADC_CHANNEL_CFG_DT(MY_ADC_CHANNEL_1);
+static const struct device *bio_sen1 =
+    DEVICE_DT_GET(DT_ALIAS(sensors14_channel));
+static const uint16_t bio_adc_vref = DT_PROP(MY_ADC_CHANNEL_1, zephyr_vref_mv);
+
+/* DT spec for dht11 sensor (digital gpio) */
+static const struct gpio_dt_spec dht_sensor =
+    GPIO_DT_SPEC_GET(DT_ALIAS(dth11_sensor), gpios);
 
 /* msg struct for rx coms */
 struct drive_msg {
@@ -149,6 +164,17 @@ const float linear_velocity_range[] = {-1.5, 1.5};
 const float angular_velocity_range[] = {-5.5, 5.5};
 const float wheel_velocity_range[] = {-10.0, 10.0};
 const uint16_t channel_range[] = {172, 1811};
+
+/* bio sensor variables */
+static uint16_t bio_adc_buf;         // raw ADC sample
+static int32_t bio_final_voltage;    // converted voltage (mV)
+static int bio_dth11_data[5] = {0};  // dht11 [hum_int, hum_dec, temp_int, temp_dec, ...]
+static struct adc_sequence bio_adc_seq = {
+    .channels = BIT(0), // set to adc_channel_1.channel_id in main()
+    .buffer = &bio_adc_buf,
+    .buffer_size = sizeof(bio_adc_buf),
+    .resolution = DT_PROP(MY_ADC_CHANNEL_1, zephyr_resolution),
+};
 
 /* check if received cobs message is valid,
  * ret 0 if successfull */
@@ -408,6 +434,32 @@ void stepper_timer_handler(struct k_timer *stepper_timer_ptr) {
 
 K_TIMER_DEFINE(stepper_timer, stepper_timer_handler, NULL);
 
+/* timer to sample bio sensors (ADC channel + DHT11) */
+void bio_sensor_timer_handler(struct k_timer *bio_sensor_timer_ptr) {
+  int ret;
+
+  ret = adc_read(bio_sen1, &bio_adc_seq);
+  if (ret < 0) {
+    LOG_ERR("Bio Sensor 1: ADC read failed (%d)", ret);
+    return;
+  }
+  bio_final_voltage =
+      (bio_adc_buf * bio_adc_vref) / ((1 << bio_adc_seq.resolution) - 1);
+
+  ret = read_sensor_values(dht_sensor, bio_dth11_data);
+  if (ret < 0) {
+    LOG_ERR("DHT11: sensor read failed (%d)", ret);
+    return;
+  }
+
+  LOG_INF("Bio Sensor 1 raw: %u, voltage: %d mV", bio_adc_buf,
+          bio_final_voltage);
+  LOG_INF("DHT11 humidity: %d.%d", bio_dth11_data[0], bio_dth11_data[1]);
+  LOG_INF("DHT11 temperature: %d.%d", bio_dth11_data[2], bio_dth11_data[3]);
+}
+
+K_TIMER_DEFINE(bio_sensor_timer, bio_sensor_timer_handler, NULL);
+
 int main() {
 
   LOG_INF("Tarzan version %s\nFile: %s\n", TARZAN_GIT_VERSION, __FILE__);
@@ -526,6 +578,20 @@ int main() {
     LOG_ERR("SBUS Status led not configured\n");
   }
 
+  /* bio sensor (ADC) ready check + channel setup */
+  if (!device_is_ready(bio_sen1)) {
+    LOG_ERR("Bio sensor 1 (ADC) not ready\n");
+  }
+  bio_adc_seq.channels = BIT(adc_channel_1.channel_id);
+  if (adc_channel_setup(bio_sen1, &adc_channel_1) < 0) {
+    LOG_ERR("Bio sensor 1: ADC channel setup failed\n");
+  }
+
+  /* dht11 sensor ready check */
+  if (!gpio_is_ready_dt(&dht_sensor)) {
+    LOG_ERR("DHT11 sensor pin not ready\n");
+  }
+
   LOG_INF("Initialization completed successfully!\n");
 
   gpio_pin_set_dt(&init_led, 1); // set initialization led high
@@ -543,6 +609,9 @@ int main() {
 
   /* enabling stepper & mssg timer */
   k_timer_start(&stepper_timer, K_SECONDS(1), K_USEC((STEPPER_TIMER) / 2));
+
+  /* enabling bio sensor timer */
+  k_timer_start(&bio_sensor_timer, K_SECONDS(1), K_MSEC(BIO_SENSOR_PERIOD_MS));
 
   return 0;
 }

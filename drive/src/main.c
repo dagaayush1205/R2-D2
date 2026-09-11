@@ -1,3 +1,4 @@
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -26,7 +27,7 @@ LOG_MODULE_REGISTER(Tarzan, CONFIG_TARZAN_LOG_LEVEL);
 #define STACK_SIZE 4096   // work_q thread stack size
 #define PRIORITY 2        // work_q thread priority
 #define STEPPER_TIMER 100 // stepper pulse width in microseconds
-#define JERK_LIMITER true
+#define JERK_LIMITER false
 
 /* sbus uart */
 static const struct device *const sbus_uart =
@@ -460,8 +461,8 @@ void auto_drive_work_handler(struct k_work *auto_drive_work_ptr) {
     return;
 
   // update drive
-  drive_info->cmd.linear_x = msg->auto_cmd.linear_x;
-  drive_info->cmd.angular_z = msg->auto_cmd.angular_z;
+  drive_info->cmd.linear_x = drive_info->auto_cmd.cmd.linear_x;
+  drive_info->cmd.angular_z = drive_info->auto_cmd.cmd.angular_z;
   diffdrive_update(drive_info->drive_init, drive_info->cmd);
 
 
@@ -584,9 +585,9 @@ int main() {
 
   /* gps ready check*/
   gnss_systems_t supported, enabled;
-  if (gnss_get_supported_systems(GNSS_MODEM, &supported) < 0) 
+  if (gnss_get_supported_systems(GNSS_MODEM, &supported) < 0)
     LOG_ERR("Failed to query supported systems");
-  
+
   if (gnss_get_enabled_systems(GNSS_MODEM, &enabled) < 0)
     LOG_ERR("Failed to query enabled systems");
 

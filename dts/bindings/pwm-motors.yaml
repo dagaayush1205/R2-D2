@@ -7,6 +7,11 @@ include: base.yaml
 child-binding:
   description: PWM-driven motors (child node)
   properties:
+    label :
+      required: false
+      type: string
+      description: Label of each pwm motor being used
+
     pwms:
       required: true
       type: phandle-array

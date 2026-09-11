@@ -22,6 +22,11 @@ enum StepperDirection {
 
 extern struct quaternion q_est;
 
+/* struct to store the angles for each joint (ik) */ 
+struct ArmAngles {
+  float angle;
+};
+
 /* store imu related data */
 struct joint {
   float accel[3];
@@ -44,8 +49,7 @@ int calibrate_gyro(const struct device *dev, struct joint *data);
 int madgwick_filter(const struct device *const mag_dev,
                     const struct device *const imu_dev, struct joint *data);
 
-int calibrate_magnetometer(const struct device *dev, struct joint *data);
-
+int calibrate_magnetometer(const struct device *dev, struct joint *data); 
 enum StepperDirection update_proportional(float target_angle,
                                           float current_angel);
 #endif
